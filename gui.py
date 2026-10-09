@@ -334,8 +334,8 @@ class App:
         nb.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 6))
         diag_tab = ttk.Frame(nb, padding=8)
         vpn_tab = ttk.Frame(nb, padding=8)
-        nb.add(diag_tab, text='  Diagnostica  ')
-        nb.add(vpn_tab, text='  FortiVPN  ')
+        nb.add(diag_tab, text='Diagnostica')
+        nb.add(vpn_tab, text='FortiVPN')
         self._build_diag_tab(diag_tab)
         self._build_vpn_tab(vpn_tab)
 
@@ -364,11 +364,16 @@ class App:
         style.configure('TButton', font=('Sans', 9), padding=(8, 4))
         style.configure('TNotebook', background=self.BG, borderwidth=0, tabmargins=[2, 4, 2, 0])
         style.configure('TNotebook.Tab', font=('Sans', 10), padding=(22, 8),
-                        background='#c9d2da', foreground=self.MUTED)
+                        background='#c9d2da', foreground=self.MUTED,
+                        borderwidth=1, bordercolor=self.BG,
+                        lightcolor=self.BG, darkcolor=self.BG)
         style.map('TNotebook.Tab',
                   background=[('selected', self.CARD)],
                   foreground=[('selected', PRIMARY)],
-                  expand=[('selected', [1, 1, 1, 0])])
+                  lightcolor=[('selected', self.CARD)],
+                  darkcolor=[('selected', self.CARD)],
+                  padding=[('selected', (22, 8))],
+                  expand=[('selected', [0, 0, 0, 0])])
         for name, bg, act in (('Accent', PRIMARY, PRIMARY_D),
                               ('Danger', DANGER, DANGER_A),
                               ('Success', SUCCESS, SUCCESS_A)):
