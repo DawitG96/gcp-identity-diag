@@ -18,9 +18,16 @@ import vpn_utils
 # Risorse locali/aziendali, non versionate (vedi .gitignore). I bottoni che le
 # usano compaiono solo se il file esiste: così il repo pubblico resta generico.
 LOCAL_DIR = Path(__file__).parent / 'local'
-GUIDA_FILE = LOCAL_DIR / 'guida.md'
 NOTE_FILE = LOCAL_DIR / 'note.md'
 SETUP_FILE = LOCAL_DIR / 'setup_proxy.py'
+# Guida: versione generica versionata nel repo; local/guida.md (privata) la
+# sovrascrive se presente. Il bottone c'è sempre.
+GUIDA_DEFAULT = Path(__file__).parent / 'guida.md'
+GUIDA_LOCAL = LOCAL_DIR / 'guida.md'
+
+
+def guida_path():
+    return GUIDA_LOCAL if GUIDA_LOCAL.exists() else GUIDA_DEFAULT
 
 
 # ── Tooltip ──────────────────────────────────────────────────────────────────
@@ -84,7 +91,7 @@ class SetupDialog(tk.Toplevel):
             lf.pack(fill=tk.X, **pad)
             entries = {}
             for field, label_text in (
-                ('label',   'Label breve (es. work, personal)'),
+                ('label',   'Label breve (es. CompanyRossi, CompanyRossiInterna)'),
                 ('account', 'Email account GCP'),
                 ('project', 'Project ID'),
             ):
@@ -305,9 +312,8 @@ class App:
         # Toolbar — i bottoni locali compaiono solo se la risorsa esiste
         toolbar = ttk.Frame(main, padding=(12, 8))
         toolbar.pack(fill=tk.X)
-        if GUIDA_FILE.exists():
-            ttk.Button(toolbar, text='Guida',
-                       command=self._open_guida).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(toolbar, text='Guida',
+                   command=self._open_guida).pack(side=tk.LEFT, padx=(0, 4))
         if NOTE_FILE.exists():
             ttk.Button(toolbar, text='Note',
                        command=self._open_note).pack(side=tk.LEFT, padx=(0, 4))
@@ -1295,10 +1301,11 @@ class App:
     # ── Risorse locali (guida / note / setup) ───────────────────────────────
 
     def _open_guida(self):
-        if not GUIDA_FILE.exists():
-            messagebox.showwarning('File non trovato', str(GUIDA_FILE))
+        path = guida_path()
+        if not path.exists():
+            messagebox.showwarning('File non trovato', str(path))
             return
-        GuidaDialog(self.root, GUIDA_FILE.read_text(encoding='utf-8'))
+        GuidaDialog(self.root, path.read_text(encoding='utf-8'))
 
     def _open_note(self):
         if not NOTE_FILE.exists():
