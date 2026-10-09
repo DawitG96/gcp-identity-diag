@@ -45,7 +45,8 @@
 ══ FORTIVPN ══════════════════════════════════════════════
 
 Tab "FortiVPN" (terminale integrato):
-  - File config: file di openfortivpn (campo + "Sfoglia…")
+  - Config: lista dei file openfortivpn nella cartella salvata
+    (seleziona/doppio-click per connetterti; "Cambia…" per la cartella, ↻ aggiorna)
   - OTP: codice one-time (se richiesto dal gateway)
   - Password sudo: serve per avviare openfortivpn
   - "Connetti a FortiVPN" avvia, "Disconnetti" (rosso) chiude pulito.

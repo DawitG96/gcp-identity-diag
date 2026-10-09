@@ -441,23 +441,41 @@ class App:
         self._actions_inner.pack(fill=tk.X)
 
     def _build_vpn_tab(self, parent):
-        self._vpn_file_var = tk.StringVar()
         self._vpn_otp_var = tk.StringVar()
         self._vpn_pw_var = tk.StringVar()
+        self._vpn_dir_var = tk.StringVar()
+        self._vpn_configs = []
 
         form = ttk.LabelFrame(parent, text='Parametri connessione', padding=8)
         form.pack(fill=tk.X, pady=(0, 8))
         form.columnconfigure(1, weight=1)
 
-        ttk.Label(form, text='File config:').grid(row=0, column=0, sticky=tk.W, pady=3, padx=(0, 6))
-        ttk.Entry(form, textvariable=self._vpn_file_var).grid(row=0, column=1, sticky=tk.EW, pady=3)
-        ttk.Button(form, text='Sfoglia…', command=self._vpn_browse).grid(row=0, column=2, padx=(6, 0))
+        ttk.Label(form, text='Cartella:').grid(row=0, column=0, sticky=tk.W, pady=3, padx=(0, 6))
+        ttk.Label(form, textvariable=self._vpn_dir_var, foreground=self.MUTED).grid(
+            row=0, column=1, sticky=tk.W, pady=3)
+        fbtn = ttk.Frame(form)
+        fbtn.grid(row=0, column=2, padx=(6, 0))
+        ttk.Button(fbtn, text='Cambia…', command=self._vpn_change_folder).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(fbtn, text='↻', width=2, command=self._vpn_refresh_list).pack(side=tk.LEFT)
 
-        ttk.Label(form, text='OTP:').grid(row=1, column=0, sticky=tk.W, pady=3, padx=(0, 6))
-        ttk.Entry(form, textvariable=self._vpn_otp_var, width=20).grid(row=1, column=1, sticky=tk.W, pady=3)
+        ttk.Label(form, text='Config:').grid(row=1, column=0, sticky=tk.NW, pady=3, padx=(0, 6))
+        lw = ttk.Frame(form)
+        lw.grid(row=1, column=1, columnspan=2, sticky=tk.EW, pady=3)
+        self._vpn_list = tk.Listbox(lw, height=5, font=('Monospace', 9),
+                                    activestyle='dotbox', exportselection=False)
+        lsc = ttk.Scrollbar(lw, command=self._vpn_list.yview)
+        self._vpn_list.configure(yscrollcommand=lsc.set)
+        self._vpn_list.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        lsc.pack(side=tk.RIGHT, fill=tk.Y)
+        self._vpn_list.bind('<Double-Button-1>', lambda _e: self._connect_vpn())
 
-        ttk.Label(form, text='Password sudo:').grid(row=2, column=0, sticky=tk.W, pady=3, padx=(0, 6))
-        ttk.Entry(form, textvariable=self._vpn_pw_var, show='•', width=20).grid(row=2, column=1, sticky=tk.W, pady=3)
+        ttk.Label(form, text='OTP:').grid(row=2, column=0, sticky=tk.W, pady=3, padx=(0, 6))
+        ttk.Entry(form, textvariable=self._vpn_otp_var, width=20).grid(row=2, column=1, sticky=tk.W, pady=3)
+
+        ttk.Label(form, text='Password sudo:').grid(row=3, column=0, sticky=tk.W, pady=3, padx=(0, 6))
+        ttk.Entry(form, textvariable=self._vpn_pw_var, show='•', width=20).grid(row=3, column=1, sticky=tk.W, pady=3)
+
+        self._vpn_refresh_list()
 
         bar = ttk.Frame(parent)
         bar.pack(fill=tk.X, pady=(0, 8))
@@ -1186,12 +1204,12 @@ class App:
             messagebox.showinfo('FortiVPN', 'Connessione già attiva. Disconnetti prima.',
                                 parent=self.root)
             return
-        path = self._vpn_file_var.get().strip()
-        if not path:
-            self._vpn_browse()
-            path = self._vpn_file_var.get().strip()
-            if not path:
-                return
+        sel = self._vpn_list.curselection()
+        if not sel or not self._vpn_configs:
+            messagebox.showinfo('FortiVPN', 'Seleziona un file config dalla lista.',
+                                parent=self.root)
+            return
+        path = str(self._vpn_configs[sel[0]])
         otp = self._vpn_otp_var.get().strip()
         pw = self._vpn_pw_var.get()
 
@@ -1211,19 +1229,30 @@ class App:
         self._vpn_set_state('connecting')
         self._vpn_proc.start()
 
-    def _vpn_browse(self):
+    def _vpn_refresh_list(self):
         net_cfg = config_utils.load_network_config()
-        vpn_dir = Path(net_cfg['vpn_dir'])
-        path = filedialog.askopenfilename(
-            parent=self.root, title='File config openfortivpn',
-            initialdir=str(vpn_dir) if vpn_dir.is_dir() else str(Path.home()))
-        if not path:
+        vpn_dir = net_cfg['vpn_dir']
+        self._vpn_dir_var.set(vpn_dir)
+        self._vpn_configs = vpn_utils.list_configs(vpn_dir)
+        self._vpn_list.delete(0, tk.END)
+        for p in self._vpn_configs:
+            self._vpn_list.insert(tk.END, p.name)
+        if self._vpn_configs:
+            self._vpn_list.selection_set(0)
+        else:
+            self._vpn_list.insert(tk.END, '(nessun file config trovato)')
+
+    def _vpn_change_folder(self):
+        net_cfg = config_utils.load_network_config()
+        cur = Path(net_cfg['vpn_dir'])
+        folder = filedialog.askdirectory(
+            parent=self.root, title='Cartella config openfortivpn',
+            initialdir=str(cur) if cur.is_dir() else str(Path.home()))
+        if not folder or folder == net_cfg['vpn_dir']:
             return
-        self._vpn_file_var.set(path)
-        folder = str(Path(path).parent)
-        if folder != net_cfg['vpn_dir']:
-            net_cfg['vpn_dir'] = folder
-            config_utils.save_network_config(net_cfg)
+        net_cfg['vpn_dir'] = folder
+        config_utils.save_network_config(net_cfg)
+        self._vpn_refresh_list()
 
     def _disconnect_vpn(self):
         if self._vpn_proc and self._vpn_proc.is_running():

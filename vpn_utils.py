@@ -8,7 +8,31 @@ pressing Ctrl-C in a real terminal. That is how disconnect works here.
 """
 import os
 import pty
+import re
 import threading
+from pathlib import Path
+
+_HOST_RE = re.compile(r'(?m)^\s*host\s*=')
+
+
+def list_configs(directory):
+    """Return sorted openfortivpn config files in directory: regular files whose
+    content has a 'host = ...' setting (so junk like .deb/lock files is skipped)."""
+    out = []
+    try:
+        entries = sorted(Path(directory).iterdir())
+    except OSError:
+        return out
+    for p in entries:
+        if not p.is_file():
+            continue
+        try:
+            head = p.read_text(errors='replace')[:2048]
+        except OSError:
+            continue
+        if _HOST_RE.search(head):
+            out.append(p)
+    return out
 
 
 class PtyProcess:
@@ -81,4 +105,12 @@ if __name__ == '__main__':  # ponytail: self-check without root — pipe a child
     assert done, 'process never exited'
     assert 'hello-pty' in ''.join(out), f'output not captured: {out!r}'
     assert done[0] == 7, f'wrong returncode: {done[0]}'
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / 'vpn-a').write_text('host = 1.2.3.4\nport = 443\n')
+        (Path(d) / 'notes.md').write_text('# just notes\n')
+        (Path(d) / 'package-lock.json').write_text('{}')
+        names = [p.name for p in list_configs(d)]
+        assert names == ['vpn-a'], f'list_configs picked wrong files: {names}'
     print('vpn_utils self-check ok')
