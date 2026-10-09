@@ -305,9 +305,14 @@ class App:
         ttk.Label(htext, text='GCP Identity Diagnostics', style='Header.TLabel').pack(anchor=tk.W)
         ttk.Label(htext, text='Gestione identità GCP, rete aziendale e VPN',
                   style='Sub.TLabel').pack(anchor=tk.W)
-        self._vpn_badge_var = tk.StringVar(value='VPN ⚫ disconnessa')
-        ttk.Label(header, textvariable=self._vpn_badge_var,
-                  style='Badge.TLabel').pack(side=tk.RIGHT, anchor=tk.E)
+        badge = ttk.Frame(header, style='HeaderBar.TFrame')
+        badge.pack(side=tk.RIGHT, anchor=tk.E)
+        self._vpn_dot = ttk.Label(badge, text='●', style='Badge.TLabel',
+                                  foreground=self.DOT_OFF)
+        self._vpn_dot.pack(side=tk.LEFT, padx=(0, 5))
+        self._vpn_badge_var = tk.StringVar(value='VPN disconnessa')
+        ttk.Label(badge, textvariable=self._vpn_badge_var,
+                  style='Badge.TLabel').pack(side=tk.LEFT)
 
         # Toolbar — i bottoni locali compaiono solo se la risorsa esiste
         toolbar = ttk.Frame(main, padding=(12, 8))
@@ -341,6 +346,7 @@ class App:
 
     def _setup_styles(self):
         self.BG, self.CARD, self.FG, self.MUTED = '#eef1f4', '#ffffff', '#1a2733', '#5a6b7b'
+        self.DOT_OFF, self.DOT_ON, self.DOT_WARN = '#9e9e9e', '#4caf50', '#ffb300'
         PRIMARY, PRIMARY_D = '#1565c0', '#0d47a1'
         DANGER, DANGER_A = '#c62828', '#d32f2f'
         SUCCESS, SUCCESS_A = '#2e7d32', '#388e3c'
@@ -356,10 +362,13 @@ class App:
         style.configure('TLabelframe.Label', background=self.BG, foreground=PRIMARY,
                         font=('Sans', 10, 'bold'))
         style.configure('TButton', font=('Sans', 9), padding=(8, 4))
-        style.configure('TNotebook', background=self.BG, borderwidth=0)
-        style.configure('TNotebook.Tab', font=('Sans', 10), padding=(16, 7))
+        style.configure('TNotebook', background=self.BG, borderwidth=0, tabmargins=[2, 4, 2, 0])
+        style.configure('TNotebook.Tab', font=('Sans', 10), padding=(22, 8),
+                        background='#c9d2da', foreground=self.MUTED)
         style.map('TNotebook.Tab',
-                  background=[('selected', self.CARD)], foreground=[('selected', PRIMARY)])
+                  background=[('selected', self.CARD)],
+                  foreground=[('selected', PRIMARY)],
+                  expand=[('selected', [1, 1, 1, 0])])
         for name, bg, act in (('Accent', PRIMARY, PRIMARY_D),
                               ('Danger', DANGER, DANGER_A),
                               ('Success', SUCCESS, SUCCESS_A)):
@@ -460,9 +469,12 @@ class App:
             bar, text='Disconnetti', style='Danger.TButton',
             state=tk.DISABLED, command=self._disconnect_vpn)
         self._vpn_disconnect_btn.pack(side=tk.LEFT)
-        self._vpn_status_var = tk.StringVar(value='⚫ Disconnesso')
+        self._vpn_status_var = tk.StringVar(value='Disconnesso')
         ttk.Label(bar, textvariable=self._vpn_status_var,
                   font=('Sans', 10, 'bold')).pack(side=tk.RIGHT)
+        self._vpn_status_dot = ttk.Label(bar, text='●', foreground=self.DOT_OFF,
+                                         font=('Sans', 12))
+        self._vpn_status_dot.pack(side=tk.RIGHT, padx=(0, 5))
 
         term_lf = ttk.LabelFrame(parent, text='Terminale FortiVPN', padding=6)
         term_lf.pack(fill=tk.BOTH, expand=True)
@@ -1239,13 +1251,15 @@ class App:
         running = state in ('connecting', 'connected')
         self._vpn_connect_btn.configure(state=tk.DISABLED if running else tk.NORMAL)
         self._vpn_disconnect_btn.configure(state=tk.NORMAL if running else tk.DISABLED)
-        label, badge = {
-            'connecting':   ('🟡 Connessione...', 'VPN 🟡 connessione...'),
-            'connected':    ('🟢 Connesso',       'VPN 🟢 connessa'),
-            'disconnected': ('⚫ Disconnesso',     'VPN ⚫ disconnessa'),
+        label, badge, dot = {
+            'connecting':   ('Connessione...', 'VPN connessione...', self.DOT_WARN),
+            'connected':    ('Connesso',       'VPN connessa',       self.DOT_ON),
+            'disconnected': ('Disconnesso',    'VPN disconnessa',    self.DOT_OFF),
         }[state]
         self._vpn_status_var.set(label)
         self._vpn_badge_var.set(badge)
+        self._vpn_dot.configure(foreground=dot)
+        self._vpn_status_dot.configure(foreground=dot)
 
     def _vpn_clear(self):
         self._vpn_term.config(state=tk.NORMAL)
