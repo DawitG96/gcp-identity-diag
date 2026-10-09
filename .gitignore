@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+# Risorse locali/aziendali, non pubblicabili (guida, note, setup proxy)
+local/
+.claude/
