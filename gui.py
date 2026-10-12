@@ -8,8 +8,9 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
+import claude_models
 import config_utils
 import gcloud_utils
 import network_utils
@@ -270,6 +271,60 @@ class GuidaDialog(tk.Toplevel):
         ttk.Button(self, text='Chiudi', command=self.destroy).pack(pady=8)
 
 
+class ModelsDialog(tk.Toplevel):
+    """Imposta i modelli Claude Code. Scrive ~/.claude/settings.json ("model")
+    e, se esiste, gli export in ~/.config/claude-int-aziendale.sh (ccvlp)."""
+
+    def __init__(self, parent, on_save):
+        super().__init__(parent)
+        self.on_save = on_save
+        self.title('Modelli Claude Code')
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+        pad = dict(padx=12, pady=6)
+
+        ttk.Label(self, text='Modelli Claude Code', font=('', 11, 'bold')).pack(**pad)
+        ttk.Label(self, text='Aggiorna qui quando arrivano nuovi modelli (es. via mail IT).',
+                  foreground='#5a6b7b').pack(anchor=tk.W, padx=12)
+
+        main, fast = claude_models.read_models()
+        lf = ttk.LabelFrame(self, text='Nomi modello', padding=8)
+        lf.pack(fill=tk.X, **pad)
+        self._vars = {}
+        for field, label_text, value in (
+            ('main', 'Modello principale / default (ANTHROPIC_MODEL)', main),
+            ('fast', 'Modello fast (ANTHROPIC_SMALL_FAST_MODEL)', fast),
+        ):
+            row = ttk.Frame(lf)
+            row.pack(fill=tk.X, pady=2)
+            ttk.Label(row, text=label_text, width=42, anchor=tk.W).pack(side=tk.LEFT)
+            var = tk.StringVar(value=value)
+            # Valore corrente incluso anche se non in MODELS (es. ID vecchio gia' salvato).
+            values = claude_models.MODELS + ([value] if value not in claude_models.MODELS else [])
+            ttk.Combobox(row, width=28, textvariable=var, values=values,
+                         state='readonly').pack(side=tk.LEFT)
+            self._vars[field] = var
+
+        tgt = 'settings.json' + (' + claude-int-aziendale.sh' if claude_models.CLAUDE_SH.exists() else '')
+        ttk.Label(self, text=f'Destinazione: {tgt}', foreground='#5a6b7b').pack(anchor=tk.W, padx=12)
+
+        btn_row = ttk.Frame(self)
+        btn_row.pack(**pad)
+        ttk.Button(btn_row, text='Salva', command=self._save).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row, text='Annulla', command=self.destroy).pack(side=tk.LEFT)
+        self.wait_window()
+
+    def _save(self):
+        main = self._vars['main'].get().strip()
+        fast = self._vars['fast'].get().strip()
+        if not main or not fast:
+            messagebox.showerror('Errore', 'Entrambi i nomi modello sono obbligatori.', parent=self)
+            return
+        self.on_save(main, fast)
+        self.destroy()
+
+
 # ── Main application ───────────────────────────────────────────────────────────
 
 class App:
@@ -279,13 +334,13 @@ class App:
         self._buttons = {}
         self._busy_count = 0
         self._adc_login_times: dict = {}
-        self._vpn_proc = None
-        self._vpn_pw = None
-        self._vpn_pw_sent = False
+        self._vpn_log_pos = 0
+        self._vpn_state = 'disconnected'
         root.title('GCP Identity Diagnostics')
         root.resizable(True, True)
         self._build_static_ui()
         self._load_or_setup()
+        self._vpn_poll()  # rileva sessione gia' attiva (sopravvissuta a chiusura app) + tail log
 
     # ── Static UI construction ─────────────────────────────────────────────
 
@@ -319,6 +374,8 @@ class App:
         toolbar.pack(fill=tk.X)
         ttk.Button(toolbar, text='Guida',
                    command=self._open_guida).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(toolbar, text='Modelli',
+                   command=self._open_models).pack(side=tk.LEFT, padx=(0, 4))
         if NOTE_FILE.exists():
             ttk.Button(toolbar, text='Note',
                        command=self._open_note).pack(side=tk.LEFT, padx=(0, 4))
@@ -1203,9 +1260,9 @@ class App:
     # ── FortiVPN (terminale integrato, rete normale) ─────────────────
 
     def _connect_vpn(self):
-        """openfortivpn in un pty integrato. File config custom (es. ~/Desktop/vpn),
-        sudo tramite -S (password via dialog), OTP opzionale via --otp."""
-        if self._vpn_proc and self._vpn_proc.is_running():
+        """Lancia openfortivpn staccato (propria sessione): la VPN resta su anche
+        chiudendo l'app. Output nel logfile, mostrato via tail. sudo -S, OTP via --otp."""
+        if vpn_utils.find_pid() is not None:
             messagebox.showinfo('FortiVPN', 'Connessione già attiva. Disconnetti prima.',
                                 parent=self.root)
             return
@@ -1217,22 +1274,13 @@ class App:
         path = str(self._vpn_configs[sel[0]])
         otp = self._vpn_otp_var.get().strip()
         pw = self._vpn_pw_var.get()
-
-        # -c <file>: il file è un config; l'arg posizionale sarebbe l'host.
-        # -S: sudo legge la password da stdin; -p marca il prompt per rilevarlo.
-        argv = ['sudo', '-S', '-p', 'SUDO_PW_PROMPT:', 'openfortivpn', '-c', path]
-        if otp:
-            argv += ['--otp', otp]
-        self._vpn_pw = pw
         self._vpn_pw_var.set('')  # non lasciare la password in chiaro nel campo
-        self._vpn_pw_sent = False
         self._vpn_clear()
+        self._vpn_log_pos = 0
         self._vpn_append(f'$ sudo openfortivpn -c {path}'
                          + (' --otp ***' if otp else '') + '\n')
-        self._vpn_proc = vpn_utils.PtyProcess(
-            argv, on_output=self._vpn_on_output, on_exit=self._vpn_on_exit)
+        vpn_utils.start(path, pw, otp)
         self._vpn_set_state('connecting')
-        self._vpn_proc.start()
 
     def _vpn_refresh_list(self):
         net_cfg = config_utils.load_network_config()
@@ -1260,28 +1308,46 @@ class App:
         self._vpn_refresh_list()
 
     def _disconnect_vpn(self):
-        if self._vpn_proc and self._vpn_proc.is_running():
-            self._vpn_append('\n[Ctrl-C inviato — disconnessione in corso...]\n')
-            self._vpn_proc.send_sigint()
+        if vpn_utils.find_pid() is None:
+            return
+        pw = self._vpn_pw_var.get() or ('' if vpn_utils.sudo_nopass() else simpledialog.askstring(
+            'FortiVPN', 'Password sudo per disconnettere:', show='•', parent=self.root))
+        if pw is None:
+            return
+        self._vpn_pw_var.set('')
+        self._vpn_append('\n[SIGINT inviato — disconnessione in corso...]\n')
+        vpn_utils.stop(pw)
 
-    def _vpn_on_output(self, chunk: str):
-        # Invia la password sudo appena compare il prompt, una sola volta.
-        if not self._vpn_pw_sent and 'SUDO_PW_PROMPT:' in chunk:
-            self._vpn_pw_sent = True
-            self._vpn_proc.write((self._vpn_pw or '') + '\n')
-            self._vpn_pw = None  # non tenerla in memoria
-            chunk = chunk.replace('SUDO_PW_PROMPT:', '')
-        if 'Tunnel is up and running' in chunk:
-            self.root.after(0, lambda: self._vpn_set_state('connected'))
-        self.root.after(0, lambda: self._vpn_append(chunk))
+    def _vpn_poll(self):
+        """Ogni secondo: tail del logfile + stato da pid (così vede sessioni
+        sopravvissute alla chiusura app) + tempo di connessione."""
+        self._vpn_tail_log()
+        pid = vpn_utils.find_pid()
+        if pid is None:
+            state = 'disconnected'
+        else:
+            try:
+                log = vpn_utils.LOG_FILE.read_text(errors='replace')
+            except OSError:
+                log = ''
+            state = 'connected' if vpn_utils.CONNECTED_MARK in log else 'connecting'
+        elapsed = vpn_utils.fmt_elapsed(vpn_utils.elapsed_seconds(pid)) if pid else ''
+        self._vpn_set_state(state, elapsed)
+        self.root.after(1000, self._vpn_poll)
 
-    def _vpn_on_exit(self, rc: int):
-        def done():
-            self._vpn_append(f'\n[openfortivpn terminato — codice {rc}]\n')
-            self._vpn_set_state('disconnected')
-        self.root.after(0, done)
+    def _vpn_tail_log(self):
+        try:
+            data = vpn_utils.LOG_FILE.read_text(errors='replace')
+        except OSError:
+            return
+        if len(data) < self._vpn_log_pos:  # log troncato (nuova connessione)
+            self._vpn_log_pos = 0
+        if len(data) > self._vpn_log_pos:
+            self._vpn_append(data[self._vpn_log_pos:])
+            self._vpn_log_pos = len(data)
 
-    def _vpn_set_state(self, state: str):
+    def _vpn_set_state(self, state: str, elapsed: str = ''):
+        self._vpn_state = state
         running = state in ('connecting', 'connected')
         self._vpn_connect_btn.configure(state=tk.DISABLED if running else tk.NORMAL)
         self._vpn_disconnect_btn.configure(state=tk.NORMAL if running else tk.DISABLED)
@@ -1290,6 +1356,9 @@ class App:
             'connected':    ('Connesso',       'VPN connessa',       self.DOT_ON),
             'disconnected': ('Disconnesso',    'VPN disconnessa',    self.DOT_OFF),
         }[state]
+        if state == 'connected' and elapsed:
+            label = f'Connesso (da {elapsed})'
+            badge = f'VPN connessa · {elapsed}'
         self._vpn_status_var.set(label)
         self._vpn_badge_var.set(badge)
         self._vpn_dot.configure(foreground=dot)
@@ -1311,13 +1380,17 @@ class App:
         self._vpn_term.config(state=tk.DISABLED)
 
     def _on_close(self):
-        if self._vpn_proc and self._vpn_proc.is_running():
-            if not messagebox.askyesno(
-                    'FortiVPN', 'VPN ancora attiva. Disconnettere e uscire?',
-                    parent=self.root):
+        # VPN gira staccata: può restare su dopo la chiusura. Sì = resta connessa.
+        if vpn_utils.find_pid() is not None:
+            keep = messagebox.askyesnocancel(
+                'FortiVPN', 'VPN attiva. Lasciarla connessa in background?\n'
+                'Sì = resta connessa · No = disconnetti · Annulla = non uscire',
+                parent=self.root)
+            if keep is None:
                 return
-            self._vpn_proc.send_sigint()
-            time.sleep(0.3)
+            if not keep:
+                self._disconnect_vpn()
+                time.sleep(0.5)
         self.root.destroy()
 
     def _open_terminal(self, cmd: str, done_msg: str):
@@ -1371,6 +1444,21 @@ class App:
         txt.insert('1.0', NOTE_FILE.read_text(encoding='utf-8'))
         txt.config(state=tk.DISABLED)
         ttk.Button(win, text='Chiudi', command=win.destroy).pack(pady=8)
+
+    def _open_models(self):
+        def on_save(main, fast):
+            written = claude_models.save_models(main, fast)
+            if written:
+                self._log(f'Modelli: {main} / {fast}')
+                for p in written:
+                    self._log(f'  aggiornato {p}')
+                messagebox.showinfo(
+                    'Modelli',
+                    'Modelli salvati.\nApri una nuova shell (o: source ~/.config/claude-int-aziendale.sh) '
+                    'e usa /model nelle sessioni gia\' aperte.')
+            else:
+                messagebox.showinfo('Modelli', 'Nessuna modifica (valori gia\' impostati).')
+        ModelsDialog(self.root, on_save)
 
     def _run_setup_local(self):
         if not SETUP_FILE.exists():

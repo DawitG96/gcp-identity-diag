@@ -3,3 +3,6 @@ __pycache__/
 # Risorse locali/aziendali, non pubblicabili (guida, note, setup proxy)
 local/
 .claude/
+
+# File env compilato (solo .env.example versionato)
+.env

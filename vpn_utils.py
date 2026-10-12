@@ -1,18 +1,21 @@
-"""Run a command under a pseudo-terminal so we can show its live output in the
-GUI, feed it input (sudo password / OTP), and disconnect it cleanly.
+"""FortiVPN helpers: start openfortivpn detached so the tunnel survives the GUI
+closing, tail its logfile for live output, and detect/stop a session on reopen.
 
-openfortivpn runs as root under sudo. A normal user cannot SIGTERM a root
-process, but the pty line discipline can: writing Ctrl-C (\\x03) to the master
-delivers SIGINT to the foreground process group of the slave tty — exactly like
-pressing Ctrl-C in a real terminal. That is how disconnect works here.
+openfortivpn runs as root under sudo and is launched in its own session
+(start_new_session=True), so it is not killed when the GUI process exits. On
+reopen we find it again by name (pgrep) and read how long it has run (ps
+etimes). Output is appended to LOG_FILE so it can be shown whether the session
+was started this run or a previous one.
 """
-import os
-import pty
 import re
-import threading
+import subprocess
 from pathlib import Path
 
 _HOST_RE = re.compile(r'(?m)^\s*host\s*=')
+
+LOG_FILE = Path.home() / '.cache' / 'fortivpn-gui.log'
+PROC_NAME = 'openfortivpn'
+CONNECTED_MARK = 'Tunnel is up and running'
 
 
 def list_configs(directory):
@@ -35,76 +38,67 @@ def list_configs(directory):
     return out
 
 
-class PtyProcess:
-    def __init__(self, argv, on_output, on_exit):
-        """argv: command list. on_output(str) and on_exit(int returncode) are
-        called from a background reader thread — marshal to the UI thread
-        yourself (e.g. root.after)."""
-        self.argv = argv
-        self._on_output = on_output
-        self._on_exit = on_exit
-        self.pid = None
-        self._fd = None
-
-    def start(self):
-        pid, fd = pty.fork()
-        if pid == 0:  # child: becomes the pty slave, with the slave as its ctty
-            try:
-                os.execvp(self.argv[0], self.argv)
-            except OSError:
-                os._exit(127)
-        self.pid = pid
-        self._fd = fd
-        threading.Thread(target=self._reader, daemon=True).start()
-
-    def _reader(self):
-        try:
-            while True:
-                try:
-                    data = os.read(self._fd, 4096)
-                except OSError:
-                    break  # slave closed
-                if not data:
-                    break
-                self._on_output(data.decode('utf-8', 'replace'))
-        finally:
-            try:
-                _, status = os.waitpid(self.pid, 0)
-                rc = os.waitstatus_to_exitcode(status)
-            except OSError:
-                rc = -1
-            try:
-                os.close(self._fd)
-            except OSError:
-                pass
-            self._fd = None
-            self._on_exit(rc)
-
-    def write(self, text: str):
-        if self._fd is not None:
-            os.write(self._fd, text.encode())
-
-    def send_sigint(self):
-        """Ctrl-C to the foreground process group via the pty line discipline."""
-        self.write('\x03')
-
-    def is_running(self) -> bool:
-        return self._fd is not None
+def find_pid():
+    """PID of the running openfortivpn, or None. Exact-name match."""
+    r = subprocess.run(['pgrep', '-x', PROC_NAME], capture_output=True, text=True)
+    pids = [int(x) for x in r.stdout.split()]
+    return pids[0] if pids else None
 
 
-if __name__ == '__main__':  # ponytail: self-check without root — pipe a child's output through the pty
-    import time
-    out, done = [], []
-    p = PtyProcess(['bash', '-c', 'echo hello-pty; exit 7'],
-                   on_output=out.append, on_exit=done.append)
-    p.start()
-    for _ in range(50):
-        if done:
-            break
-        time.sleep(0.05)
-    assert done, 'process never exited'
-    assert 'hello-pty' in ''.join(out), f'output not captured: {out!r}'
-    assert done[0] == 7, f'wrong returncode: {done[0]}'
+def elapsed_seconds(pid):
+    """Seconds `pid` has run (ps etimes), or None if gone."""
+    r = subprocess.run(['ps', '-o', 'etimes=', '-p', str(pid)],
+                       capture_output=True, text=True)
+    s = r.stdout.strip()
+    return int(s) if s.isdigit() else None
+
+
+def fmt_elapsed(secs):
+    """Seconds -> compact 'HHhMMm' / 'MMm' / 'SSs'."""
+    if secs is None:
+        return ''
+    h, rem = divmod(secs, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f'{h}h {m:02d}m'
+    if m:
+        return f'{m}m {s:02d}s'
+    return f'{s}s'
+
+
+def start(config_path, password, otp=''):
+    """Launch openfortivpn detached (own session) appending to LOG_FILE, sudo
+    password fed via stdin. Survives the GUI exiting. Returns nothing."""
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LOG_FILE.write_text('')  # fresh log per connect
+    argv = ['sudo', '-S', '-p', '', PROC_NAME, '-c', config_path]
+    if otp:
+        argv += ['--otp', otp]
+    log = open(LOG_FILE, 'a')
+    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=log,
+                            stderr=subprocess.STDOUT, start_new_session=True, text=True)
+    proc.stdin.write((password or '') + '\n')
+    proc.stdin.flush()
+    proc.stdin.close()
+
+
+def sudo_nopass():
+    """True if sudoers lets us run pkill without a password."""
+    return subprocess.run(['sudo', '-n', '-l', 'pkill'], capture_output=True).returncode == 0
+
+
+def stop(password):
+    """SIGINT openfortivpn for a clean tunnel teardown. Needs sudo password
+    because it runs as root (the GUI may be a fresh process with no cached sudo)."""
+    subprocess.run(['sudo', '-S', '-p', '', 'pkill', '-INT', '-x', PROC_NAME],
+                   input=(password or '') + '\n', text=True, capture_output=True)
+
+
+if __name__ == '__main__':
+    assert fmt_elapsed(0) == '0s'
+    assert fmt_elapsed(75) == '1m 15s'
+    assert fmt_elapsed(3725) == '1h 02m', fmt_elapsed(3725)
+    assert fmt_elapsed(None) == ''
 
     import tempfile
     with tempfile.TemporaryDirectory() as d:
