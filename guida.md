@@ -48,8 +48,15 @@ Tab "FortiVPN" (terminale integrato):
   - Config: lista dei file openfortivpn nella cartella salvata
     (seleziona/doppio-click per connetterti; "Cambia…" per la cartella, ↻ aggiorna)
   - OTP: codice one-time (se richiesto dal gateway)
-  - Password sudo: serve per avviare openfortivpn
+  - Password sudo: serve per avviare openfortivpn (vedi sotto per non scriverla)
   - "Connetti a FortiVPN" avvia, "Disconnetti" (rosso) chiude pulito.
+
+  Niente password sudo (consigliato, una volta sola):
+    echo "$USER ALL=(root) NOPASSWD: /usr/bin/openfortivpn, /usr/bin/pkill" \
+      | sudo tee /etc/sudoers.d/gcp-diag-vpn
+    sudo chmod 440 /etc/sudoers.d/gcp-diag-vpn && sudo visudo -c
+  Poi lascia vuoto il campo: connetti, disconnetti e chiudi app senza password.
+  (NB: NOPASSWD su pkill permette di terminare qualsiasi processo come root.)
 
 
 ══ NOTE ══════════════════════════════════════════════════
@@ -67,3 +74,17 @@ Bottoni disabilitati durante Fix / Login ADC / Sync:
   Il label "⏳ Operazione in corso" scompare quando è finita.
 
 Auto-refresh ogni 5s: stato identità e rete aggiornati automaticamente.
+
+══ CLAUDE CODE (rete interna) ════════════════════════════
+
+Opzionale: serve solo per usare Claude Code via LLM proxy aziendale.
+  1. cp .env.example ~/.config/claude-int-aziendale.env
+     e compila i valori reali (NON committare il file compilato).
+  2. Copia lo script claude-int-aziendale.sh (fornito dall'IT/collega,
+     in local/ del repo) in ~/.config/ e aggiungi a ~/.bashrc:
+       [ -f ~/.config/claude-int-aziendale.sh ] && . ~/.config/claude-int-aziendale.sh
+  3. Nuova shell, poi:
+       ccvlp     rete diretta / VPN
+       ccvlp-v   con proxy aziendale
+  La GUI (bottone modelli) legge/scrive i modelli in ~/.claude/settings.json
+  e nello script, se presente.
